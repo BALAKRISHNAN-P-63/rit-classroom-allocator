@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { supabase } from "./supabaseClient";
 
 // ============================================
 // DATA - Extracted from uploaded PDF
@@ -1395,13 +1396,199 @@ function AdminView() {
   );
 }
 
-function LoginScreen({ onLogin }) {
+function LoginScreen({ onLogin, onAuth }) {
+  const [authMode, setAuthMode] = useState(null); // null = role select, 'login', 'signup'
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [selectedRole, setSelectedRole] = useState("student");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    const { data, error: err } = await supabase.auth.signInWithPassword({ email, password });
+    setLoading(false);
+    if (err) { setError(err.message); return; }
+    if (data?.user) onAuth(data.user);
+  };
+
+  const handleSignup = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    setSuccess("");
+    const { data, error: err } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { full_name: fullName, role: selectedRole } }
+    });
+    setLoading(false);
+    if (err) { setError(err.message); return; }
+    if (data?.user) {
+      // Create profile
+      await supabase.from("profiles").upsert({
+        id: data.user.id,
+        role: selectedRole,
+        full_name: fullName,
+      });
+      setSuccess("Account created! Check your email to confirm, or sign in now.");
+      setAuthMode("login");
+    }
+  };
+
+  if (authMode === "login" || authMode === "signup") {
+    return (
+      <div className="login-container">
+        <div className="login-card">
+          <div className="login-brand">Rajalakshmi Institute of Technology</div>
+          <div className="login-title">{authMode === "login" ? "Sign In" : "Create Account"}</div>
+          <div className="login-subtitle">
+            {authMode === "login" ? "Welcome back!" : "Join the classroom allocator"}
+          </div>
+
+          {error && (
+            <div style={{ padding: "10px 14px", background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 8, marginBottom: 16, fontSize: 13, color: "#f87171" }}>
+              {error}
+            </div>
+          )}
+          {success && (
+            <div style={{ padding: "10px 14px", background: "rgba(6,214,160,0.12)", border: "1px solid rgba(6,214,160,0.3)", borderRadius: 8, marginBottom: 16, fontSize: 13, color: "#06d6a0" }}>
+              {success}
+            </div>
+          )}
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, textAlign: "left" }}>
+            {authMode === "signup" && (
+              <div className="select-group">
+                <span className="select-label">Full Name</span>
+                <input
+                  className="select-input"
+                  type="text"
+                  placeholder="Enter your name"
+                  value={fullName}
+                  onChange={e => setFullName(e.target.value)}
+                  style={{ width: "100%" }}
+                />
+              </div>
+            )}
+
+            <div className="select-group">
+              <span className="select-label">Email</span>
+              <input
+                className="select-input"
+                type="email"
+                placeholder="your@email.com"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                style={{ width: "100%" }}
+              />
+            </div>
+
+            <div className="select-group">
+              <span className="select-label">Password</span>
+              <input
+                className="select-input"
+                type="password"
+                placeholder="••••••••"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                style={{ width: "100%" }}
+              />
+            </div>
+
+            {authMode === "signup" && (
+              <div className="select-group">
+                <span className="select-label">Role</span>
+                <select className="select-input" value={selectedRole} onChange={e => setSelectedRole(e.target.value)} style={{ width: "100%" }}>
+                  <option value="student">Student</option>
+                  <option value="staff">Staff</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+            )}
+
+            <button
+              onClick={authMode === "login" ? handleLogin : handleSignup}
+              disabled={loading}
+              style={{
+                width: "100%",
+                padding: "12px",
+                background: "var(--accent-cyan)",
+                color: "#0a0e1a",
+                border: "none",
+                borderRadius: 8,
+                fontSize: 15,
+                fontWeight: 700,
+                cursor: loading ? "wait" : "pointer",
+                fontFamily: "'DM Sans', sans-serif",
+                opacity: loading ? 0.6 : 1,
+                marginTop: 4,
+              }}
+            >
+              {loading ? "Please wait..." : authMode === "login" ? "Sign In" : "Create Account"}
+            </button>
+          </div>
+
+          <div style={{ marginTop: 16, fontSize: 13, color: "var(--text-secondary)" }}>
+            {authMode === "login" ? (
+              <>Don't have an account?{" "}
+                <span onClick={() => { setAuthMode("signup"); setError(""); }} style={{ color: "var(--accent-cyan)", cursor: "pointer" }}>Sign up</span>
+              </>
+            ) : (
+              <>Already have an account?{" "}
+                <span onClick={() => { setAuthMode("login"); setError(""); }} style={{ color: "var(--accent-cyan)", cursor: "pointer" }}>Sign in</span>
+              </>
+            )}
+          </div>
+
+          <div style={{ marginTop: 12 }}>
+            <span onClick={() => setAuthMode(null)} style={{ fontSize: 12, color: "var(--text-muted)", cursor: "pointer" }}>
+              ← Back to quick access
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="login-container">
       <div className="login-card">
         <div className="login-brand">Rajalakshmi Institute of Technology</div>
         <div className="login-title">ClassRoom Allocator</div>
         <div className="login-subtitle">Smart classroom management for AI&DS and AI&ML departments</div>
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={() => setAuthMode("login")}
+              style={{
+                flex: 1, padding: "10px", background: "rgba(6,214,160,0.12)", border: "1px solid rgba(6,214,160,0.3)",
+                borderRadius: 8, color: "var(--accent-cyan)", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif"
+              }}
+            >
+              Sign In
+            </button>
+            <button
+              onClick={() => setAuthMode("signup")}
+              style={{
+                flex: 1, padding: "10px", background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.3)",
+                borderRadius: 8, color: "#60a5fa", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif"
+              }}
+            >
+              Sign Up
+            </button>
+          </div>
+          <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 8, textAlign: "center" }}>
+            Sign in for personalized experience, or browse as guest below
+          </div>
+        </div>
+
+        <div className="nav-label" style={{ textAlign: "center", marginBottom: 8 }}>Quick Access (Guest)</div>
         <div className="role-cards">
           <div className="role-card" onClick={() => onLogin("student")}>
             <div className="role-icon">🎓</div>
@@ -1432,8 +1619,70 @@ function LoginScreen({ onLogin }) {
 export default function App() {
   const [page, setPage] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [user, setUser] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
-  if (!page) return <><style>{CSS}</style><LoginScreen onLogin={setPage} /></>;
+  useEffect(() => {
+    // Check existing session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      const u = session?.user || null;
+      setUser(u);
+      if (u) fetchProfile(u.id);
+      setAuthLoading(false);
+    });
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const u = session?.user || null;
+      setUser(u);
+      if (u) fetchProfile(u.id);
+      else { setProfile(null); setPage(null); }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const fetchProfile = async (userId) => {
+    const { data } = await supabase.from("profiles").select("*").eq("id", userId).single();
+    if (data) {
+      setProfile(data);
+      // Auto-navigate based on role
+      if (!page) {
+        if (data.role === "student") setPage("student");
+        else if (data.role === "staff") setPage("staff");
+        else if (data.role === "admin") setPage("admin");
+      }
+    }
+  };
+
+  const handleAuth = (u) => {
+    setUser(u);
+    fetchProfile(u.id);
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+    setProfile(null);
+    setPage(null);
+  };
+
+  if (authLoading) {
+    return (
+      <>
+        <style>{CSS}</style>
+        <div className="login-container">
+          <div style={{ textAlign: "center", color: "var(--text-secondary)" }}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>🏫</div>
+            <div>Loading...</div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  if (!page) return <><style>{CSS}</style><LoginScreen onLogin={setPage} onAuth={handleAuth} /></>;
 
   const navItems = [
     { key: "student", icon: "🎓", label: "Student" },
@@ -1455,6 +1704,16 @@ export default function App() {
             <div className="sidebar-title">ClassRoom<br />Allocator</div>
           </div>
           <div className="sidebar-nav">
+            {user && (
+              <div style={{ padding: "8px 14px", marginBottom: 8 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--accent-cyan)" }}>
+                  {profile?.full_name || user.email}
+                </div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 1 }}>
+                  {profile?.role || "guest"}
+                </div>
+              </div>
+            )}
             <div className="nav-label">Navigation</div>
             {navItems.map(item => (
               <div
@@ -1467,9 +1726,9 @@ export default function App() {
               </div>
             ))}
             <div style={{ marginTop: "auto", padding: "16px 0" }}>
-              <div className="nav-item" onClick={() => setPage(null)} style={{ color: "var(--accent-red)" }}>
+              <div className="nav-item" onClick={user ? handleLogout : () => setPage(null)} style={{ color: "var(--accent-red)" }}>
                 <span className="nav-icon">↩</span>
-                Logout
+                {user ? "Sign Out" : "Back"}
               </div>
             </div>
           </div>
