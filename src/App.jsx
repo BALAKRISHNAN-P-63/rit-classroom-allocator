@@ -1248,6 +1248,179 @@ function FreeRoomsView() {
 
 function AdminView() {
   const [activeTab, setActiveTab] = useState("overview");
+  const [seedStatus, setSeedStatus] = useState("");
+  const [seeding, setSeeding] = useState(false);
+
+  // Manual entry states
+  const [newRoom, setNewRoom] = useState({ room_number: "", block: "A", floor: 0, room_type: "classroom" });
+  const [newClass, setNewClass] = useState({ name: "", year: 2, section: "A", semester: 4, class_incharge: "" });
+  const [newCourse, setNewCourse] = useState({ code: "", name: "", short_name: "", is_lab: false, lecture_hours: 3, credits: 3 });
+  const [newFaculty, setNewFaculty] = useState({ name: "", designation: "Assistant Professor", department: "AI&DS", email: "" });
+  const [formMsg, setFormMsg] = useState({ type: "", text: "" });
+
+  // DB data states
+  const [dbRooms, setDbRooms] = useState([]);
+  const [dbClasses, setDbClasses] = useState([]);
+  const [dbCourses, setDbCourses] = useState([]);
+  const [dbFaculty, setDbFaculty] = useState([]);
+  const [dbLoading, setDbLoading] = useState(false);
+
+  const loadDbData = async () => {
+    setDbLoading(true);
+    const [r, cl, co, f] = await Promise.all([
+      supabase.from("rooms").select("*").order("room_number"),
+      supabase.from("classes").select("*").order("name"),
+      supabase.from("courses").select("*").order("code"),
+      supabase.from("faculty").select("*").order("name"),
+    ]);
+    setDbRooms(r.data || []);
+    setDbClasses(cl.data || []);
+    setDbCourses(co.data || []);
+    setDbFaculty(f.data || []);
+    setDbLoading(false);
+  };
+
+  useEffect(() => { loadDbData(); }, [activeTab]);
+
+  const showMsg = (type, text) => { setFormMsg({ type, text }); setTimeout(() => setFormMsg({ type: "", text: "" }), 4000); };
+
+  const handleAddRoom = async () => {
+    if (!newRoom.room_number) { showMsg("error", "Room number required"); return; }
+    const { error } = await supabase.from("rooms").insert([newRoom]);
+    if (error) { showMsg("error", error.message); return; }
+    showMsg("success", `Room ${newRoom.room_number} added`);
+    setNewRoom({ room_number: "", block: "A", floor: 0, room_type: "classroom" });
+    loadDbData();
+  };
+
+  const handleDeleteRoom = async (id, name) => {
+    if (!confirm(`Delete room ${name}?`)) return;
+    await supabase.from("rooms").delete().eq("id", id);
+    loadDbData();
+  };
+
+  const handleAddClass = async () => {
+    if (!newClass.name) { showMsg("error", "Class name required"); return; }
+    const dept = newClass.name.includes("ML") ? "AI&ML" : "AI&DS";
+    const { error } = await supabase.from("classes").insert([{ ...newClass, department_id: null }]);
+    if (error) { showMsg("error", error.message); return; }
+    showMsg("success", `Class ${newClass.name} added`);
+    setNewClass({ name: "", year: 2, section: "A", semester: 4, class_incharge: "" });
+    loadDbData();
+  };
+
+  const handleDeleteClass = async (id, name) => {
+    if (!confirm(`Delete class ${name}?`)) return;
+    await supabase.from("classes").delete().eq("id", id);
+    loadDbData();
+  };
+
+  const handleAddCourse = async () => {
+    if (!newCourse.code || !newCourse.name) { showMsg("error", "Code and name required"); return; }
+    const { error } = await supabase.from("courses").insert([newCourse]);
+    if (error) { showMsg("error", error.message); return; }
+    showMsg("success", `Course ${newCourse.code} added`);
+    setNewCourse({ code: "", name: "", short_name: "", is_lab: false, lecture_hours: 3, credits: 3 });
+    loadDbData();
+  };
+
+  const handleDeleteCourse = async (id, code) => {
+    if (!confirm(`Delete course ${code}?`)) return;
+    await supabase.from("courses").delete().eq("id", id);
+    loadDbData();
+  };
+
+  const handleAddFaculty = async () => {
+    if (!newFaculty.name) { showMsg("error", "Name required"); return; }
+    const { error } = await supabase.from("faculty").insert([newFaculty]);
+    if (error) { showMsg("error", error.message); return; }
+    showMsg("success", `Faculty ${newFaculty.name} added`);
+    setNewFaculty({ name: "", designation: "Assistant Professor", department: "AI&DS", email: "" });
+    loadDbData();
+  };
+
+  const handleDeleteFaculty = async (id, name) => {
+    if (!confirm(`Delete faculty ${name}?`)) return;
+    await supabase.from("faculty").delete().eq("id", id);
+    loadDbData();
+  };
+
+  // Seed all hardcoded data into Supabase
+  const seedDatabase = async () => {
+    if (!confirm("This will populate the database with all timetable data from the PDF. Existing data may conflict. Continue?")) return;
+    setSeeding(true);
+    setSeedStatus("Seeding rooms...");
+    try {
+      // 1. Seed rooms
+      const roomData = ROOMS.map(r => ({
+        room_number: r,
+        block: r[0],
+        floor: parseInt(r[1]),
+        room_type: (r === "A102" || r === "A103") ? "lab" : "classroom",
+      }));
+      await supabase.from("rooms").upsert(roomData, { onConflict: "room_number" });
+
+      // 2. Seed courses
+      setSeedStatus("Seeding courses...");
+      const courseData = Object.entries(COURSES).map(([code, c]) => ({
+        code,
+        name: c.name,
+        short_name: c.short,
+        is_lab: c.name.includes("Lab") || c.name.includes("Mini Project"),
+        lecture_hours: c.name.includes("Lab") ? 0 : 3,
+        credits: c.name.includes("Lab") ? 1 : 3,
+      }));
+      await supabase.from("courses").upsert(courseData, { onConflict: "code" });
+
+      // 3. Seed faculty (extract unique names)
+      setSeedStatus("Seeding faculty...");
+      const facultyNames = new Set();
+      Object.values(FACULTY).forEach(cf => Object.values(cf).forEach(n => facultyNames.add(n)));
+      CLASSES.forEach(c => { if (c.incharge) facultyNames.add(c.incharge); });
+      const facultyData = [...facultyNames].map(name => ({
+        name,
+        designation: "Assistant Professor",
+        department: "AI&DS",
+      }));
+      for (const f of facultyData) {
+        await supabase.from("faculty").upsert(f, { onConflict: "name", ignoreDuplicates: true }).select();
+      }
+
+      // 4. Seed classes
+      setSeedStatus("Seeding classes...");
+      const classData = CLASSES.map(c => ({
+        name: c.name,
+        year: c.year,
+        section: c.id.split("_").pop(),
+        semester: c.sem,
+        class_incharge: c.incharge,
+      }));
+      for (const c of classData) {
+        await supabase.from("classes").upsert(c, { onConflict: "name", ignoreDuplicates: true }).select();
+      }
+
+      setSeedStatus("Done! All data seeded successfully.");
+      loadDbData();
+    } catch (e) {
+      setSeedStatus(`Error: ${e.message}`);
+    }
+    setSeeding(false);
+  };
+
+  const inputStyle = {
+    background: "var(--bg-card)", border: "1px solid var(--border)", color: "var(--text-primary)",
+    padding: "8px 12px", borderRadius: 8, fontFamily: "'DM Sans', sans-serif", fontSize: 13, outline: "none", width: "100%",
+  };
+
+  const btnStyle = {
+    padding: "8px 20px", background: "var(--accent-cyan)", color: "#0a0e1a", border: "none",
+    borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif",
+  };
+
+  const deleteBtnStyle = {
+    padding: "4px 10px", background: "rgba(239,68,68,0.15)", color: "#f87171", border: "1px solid rgba(239,68,68,0.3)",
+    borderRadius: 6, fontSize: 11, cursor: "pointer", fontFamily: "'DM Sans', sans-serif",
+  };
 
   return (
     <div>
@@ -1256,12 +1429,25 @@ function AdminView() {
         <div className="page-subtitle">Manage timetables, rooms, and allocations</div>
       </div>
 
+      {formMsg.text && (
+        <div style={{
+          padding: "10px 14px", borderRadius: 8, marginBottom: 16, fontSize: 13,
+          background: formMsg.type === "error" ? "rgba(239,68,68,0.12)" : "rgba(6,214,160,0.12)",
+          border: `1px solid ${formMsg.type === "error" ? "rgba(239,68,68,0.3)" : "rgba(6,214,160,0.3)"}`,
+          color: formMsg.type === "error" ? "#f87171" : "#06d6a0",
+        }}>
+          {formMsg.text}
+        </div>
+      )}
+
       <div className="day-tabs" style={{ marginBottom: 24 }}>
         {[
           { key: "overview", label: "Overview" },
-          { key: "classes", label: "Classes" },
           { key: "rooms", label: "Rooms" },
-          { key: "upload", label: "Upload PDF" },
+          { key: "courses", label: "Courses" },
+          { key: "faculty", label: "Faculty" },
+          { key: "classes", label: "Classes" },
+          { key: "seed", label: "Seed / Import" },
         ].map(tab => (
           <button key={tab.key} className={`day-tab ${activeTab === tab.key ? "active" : ""}`} onClick={() => setActiveTab(tab.key)}>
             {tab.label}
@@ -1272,122 +1458,314 @@ function AdminView() {
       {activeTab === "overview" && (
         <div>
           <div className="stats-row">
-            <div className="stat-card"><div className="stat-value blue">{CLASSES.length}</div><div className="stat-label">Total Sections</div></div>
-            <div className="stat-card"><div className="stat-value green">{ROOMS.length}</div><div className="stat-label">Total Rooms</div></div>
-            <div className="stat-card"><div className="stat-value purple">{Object.keys(COURSES).length}</div><div className="stat-label">Courses</div></div>
-            <div className="stat-card"><div className="stat-value" style={{ color: "var(--accent-orange)" }}>2</div><div className="stat-label">Departments</div></div>
+            <div className="stat-card"><div className="stat-value blue">{dbClasses.length || CLASSES.length}</div><div className="stat-label">Sections (DB / Local)</div></div>
+            <div className="stat-card"><div className="stat-value green">{dbRooms.length || ROOMS.length}</div><div className="stat-label">Rooms</div></div>
+            <div className="stat-card"><div className="stat-value purple">{dbCourses.length || Object.keys(COURSES).length}</div><div className="stat-label">Courses</div></div>
+            <div className="stat-card"><div className="stat-value" style={{ color: "var(--accent-orange)" }}>{dbFaculty.length}</div><div className="stat-label">Faculty</div></div>
           </div>
-          <div className="section-title">Registered Sections</div>
-          <div className="table-scroll">
-            <table className="timetable-grid">
-              <thead><tr><th>Section</th><th>Year</th><th>Dept</th><th>Sem</th><th>Venue</th><th>Incharge</th></tr></thead>
-              <tbody>
-                {CLASSES.map(c => (
-                  <tr key={c.id}>
-                    <td style={{ fontWeight: 600, color: "var(--accent-cyan)" }}>{c.name}</td>
-                    <td>{c.year}</td>
-                    <td>{c.dept}</td>
-                    <td>{c.sem}</td>
-                    <td style={{ fontSize: 11, maxWidth: 200, whiteSpace: "normal" }}>{c.venue}</td>
-                    <td style={{ fontSize: 12 }}>{c.incharge}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {activeTab === "classes" && (
-        <div>
-          <div className="section-title">All Timetable Data</div>
-          {CLASSES.map(cls => (
-            <div key={cls.id} style={{ marginBottom: 32 }}>
-              <div className="info-card">
-                <div className="info-card-title">{cls.name} — Semester {cls.sem}</div>
-                <div className="info-card-value">{cls.venue}</div>
-              </div>
-              <div className="table-scroll">
-                <table className="timetable-grid">
-                  <thead>
-                    <tr>
-                      <th>Day</th>
-                      {TEACHING_PERIODS.map(p => <th key={p.num}>P{p.num}</th>)}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {DAYS.map(d => (
-                      <tr key={d}>
-                        <td className="tt-day-cell">{d.slice(0, 3)}</td>
-                        {TEACHING_PERIODS.map((p, i) => {
-                          const slot = TIMETABLE[cls.id]?.[d]?.[i];
-                          return <td key={p.num} className="slot-cell"><SlotChip slot={slot} /></td>;
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+          <div className="info-card">
+            <div className="info-card-title">Quick Start</div>
+            <div style={{ color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.8 }}>
+              1. Go to <strong style={{ color: "var(--accent-cyan)" }}>Seed / Import</strong> tab to push all pre-loaded timetable data to Supabase<br />
+              2. Or manually add data using the <strong style={{ color: "var(--accent-cyan)" }}>Rooms</strong>, <strong style={{ color: "var(--accent-cyan)" }}>Courses</strong>, <strong style={{ color: "var(--accent-cyan)" }}>Faculty</strong>, and <strong style={{ color: "var(--accent-cyan)" }}>Classes</strong> tabs<br />
+              3. Data in the database will be used alongside the locally pre-loaded timetable data
             </div>
-          ))}
+          </div>
+          <div style={{ marginTop: 20 }}>
+            <div className="section-title">Timetable Preview (Local Data)</div>
+            <div className="table-scroll">
+              <table className="timetable-grid">
+                <thead><tr><th>Section</th><th>Year</th><th>Dept</th><th>Sem</th><th>Venue</th><th>Incharge</th></tr></thead>
+                <tbody>
+                  {CLASSES.map(c => (
+                    <tr key={c.id}>
+                      <td style={{ fontWeight: 600, color: "var(--accent-cyan)" }}>{c.name}</td>
+                      <td>{c.year}</td><td>{c.dept}</td><td>{c.sem}</td>
+                      <td style={{ fontSize: 11, maxWidth: 200, whiteSpace: "normal" }}>{c.venue}</td>
+                      <td style={{ fontSize: 12 }}>{c.incharge}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       )}
 
       {activeTab === "rooms" && (
         <div>
-          <div className="section-title">Room Inventory</div>
-          <div className="room-grid">
-            {ROOMS.map(r => {
-              const isLab = r === "A102" || r === "A103";
-              return (
-                <div key={r} className="room-card" style={{ borderColor: isLab ? "rgba(139,92,246,0.4)" : "var(--border)" }}>
-                  <div className="room-number" style={{ color: isLab ? "var(--accent-purple)" : "var(--accent-blue)" }}>{r}</div>
-                  <div className="room-status" style={{ color: isLab ? "var(--accent-purple)" : "var(--text-muted)" }}>
-                    {isLab ? "Lab" : "Classroom"}
-                  </div>
-                  <div className="room-class-info">Block {r[0]}, Floor {r[1]}</div>
-                </div>
-              );
-            })}
+          <div className="info-card" style={{ marginBottom: 20 }}>
+            <div className="info-card-title">Add Room</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 80px 120px auto", gap: 10, alignItems: "end", marginTop: 10 }}>
+              <div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>ROOM NUMBER</div>
+                <input style={inputStyle} placeholder="e.g. A301" value={newRoom.room_number} onChange={e => setNewRoom({ ...newRoom, room_number: e.target.value, block: e.target.value[0] || "A", floor: parseInt(e.target.value[1]) || 0 })} />
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>BLOCK</div>
+                <input style={inputStyle} value={newRoom.block} readOnly />
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>FLOOR</div>
+                <input style={inputStyle} value={newRoom.floor} readOnly />
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>TYPE</div>
+                <select style={inputStyle} value={newRoom.room_type} onChange={e => setNewRoom({ ...newRoom, room_type: e.target.value })}>
+                  <option value="classroom">Classroom</option>
+                  <option value="lab">Lab</option>
+                </select>
+              </div>
+              <button style={{ ...btnStyle, height: 36 }} onClick={handleAddRoom}>Add</button>
+            </div>
           </div>
+
+          <div className="section-title">Rooms in Database ({dbRooms.length})</div>
+          {dbRooms.length === 0 ? (
+            <div className="info-card" style={{ textAlign: "center", color: "var(--text-muted)", padding: 30 }}>
+              No rooms in database yet. Add rooms above or use Seed / Import tab.
+            </div>
+          ) : (
+            <div className="table-scroll">
+              <table className="timetable-grid">
+                <thead><tr><th>Room</th><th>Block</th><th>Floor</th><th>Type</th><th>Action</th></tr></thead>
+                <tbody>
+                  {dbRooms.map(r => (
+                    <tr key={r.id}>
+                      <td style={{ fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{r.room_number}</td>
+                      <td>{r.block}</td><td>{r.floor}</td>
+                      <td><span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, background: r.room_type === "lab" ? "rgba(139,92,246,0.15)" : "rgba(59,130,246,0.15)", color: r.room_type === "lab" ? "#a78bfa" : "#60a5fa" }}>{r.room_type}</span></td>
+                      <td><button style={deleteBtnStyle} onClick={() => handleDeleteRoom(r.id, r.room_number)}>Delete</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
-      {activeTab === "upload" && (
+      {activeTab === "courses" && (
         <div>
-          <div className="info-card" style={{ textAlign: "center", padding: 40 }}>
-            <div style={{ fontSize: 48, marginBottom: 16 }}>📄</div>
-            <div className="info-card-title" style={{ fontSize: 14 }}>PDF Timetable Upload</div>
-            <div style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 20, maxWidth: 400, margin: "0 auto 20px" }}>
-              Upload your department timetable PDF. The system will parse and extract class schedules, room assignments, and faculty data automatically.
-            </div>
-            <div style={{
-              border: "2px dashed var(--border)",
-              borderRadius: 12,
-              padding: "40px 20px",
-              cursor: "pointer",
-              transition: "all 0.15s",
-              maxWidth: 400,
-              margin: "0 auto",
-            }}>
-              <div style={{ fontSize: 14, color: "var(--text-muted)" }}>
-                Drag & drop PDF here or click to browse
+          <div className="info-card" style={{ marginBottom: 20 }}>
+            <div className="info-card-title">Add Course</div>
+            <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 100px 80px auto", gap: 10, alignItems: "end", marginTop: 10 }}>
+              <div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>CODE</div>
+                <input style={inputStyle} placeholder="CS23431" value={newCourse.code} onChange={e => setNewCourse({ ...newCourse, code: e.target.value })} />
               </div>
-              <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 8 }}>
-                Supports the RIT timetable format
+              <div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>NAME</div>
+                <input style={inputStyle} placeholder="Design and Analysis of Algorithms" value={newCourse.name} onChange={e => setNewCourse({ ...newCourse, name: e.target.value })} />
               </div>
-            </div>
-            <div style={{ marginTop: 16, padding: "10px 16px", background: "rgba(245,158,11,0.1)", borderRadius: 8, display: "inline-block" }}>
-              <span style={{ fontSize: 12, color: "var(--accent-orange)" }}>
-                ⚠ Connect to Supabase backend to enable PDF upload
-              </span>
+              <div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>SHORT</div>
+                <input style={inputStyle} placeholder="DAA" value={newCourse.short_name} onChange={e => setNewCourse({ ...newCourse, short_name: e.target.value })} />
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>LAB?</div>
+                <select style={inputStyle} value={newCourse.is_lab ? "yes" : "no"} onChange={e => setNewCourse({ ...newCourse, is_lab: e.target.value === "yes" })}>
+                  <option value="no">No</option>
+                  <option value="yes">Yes</option>
+                </select>
+              </div>
+              <button style={{ ...btnStyle, height: 36 }} onClick={handleAddCourse}>Add</button>
             </div>
           </div>
-          <div className="info-card" style={{ marginTop: 16 }}>
-            <div className="info-card-title">Manual Entry</div>
-            <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>
-              Alternatively, timetable data can be entered manually through the admin interface once connected to the Supabase backend.
-              The current demo is pre-loaded with data from the uploaded PDF covering all AI&DS (A-F) and AI&ML (A-C) sections for Year 2 (Sem IV) and Year 3 (Sem VI).
+
+          <div className="section-title">Courses in Database ({dbCourses.length})</div>
+          {dbCourses.length === 0 ? (
+            <div className="info-card" style={{ textAlign: "center", color: "var(--text-muted)", padding: 30 }}>
+              No courses in database yet. Add courses above or use Seed / Import tab.
+            </div>
+          ) : (
+            <div className="table-scroll">
+              <table className="timetable-grid">
+                <thead><tr><th>Code</th><th>Name</th><th>Short</th><th>Type</th><th>Action</th></tr></thead>
+                <tbody>
+                  {dbCourses.map(c => (
+                    <tr key={c.id}>
+                      <td style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>{c.code}</td>
+                      <td>{c.name}</td>
+                      <td style={{ fontWeight: 600, color: "var(--accent-cyan)" }}>{c.short_name}</td>
+                      <td><span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, background: c.is_lab ? "rgba(139,92,246,0.15)" : "rgba(59,130,246,0.15)", color: c.is_lab ? "#a78bfa" : "#60a5fa" }}>{c.is_lab ? "Lab" : "Theory"}</span></td>
+                      <td><button style={deleteBtnStyle} onClick={() => handleDeleteCourse(c.id, c.code)}>Delete</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === "faculty" && (
+        <div>
+          <div className="info-card" style={{ marginBottom: 20 }}>
+            <div className="info-card-title">Add Faculty</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 150px 120px auto", gap: 10, alignItems: "end", marginTop: 10 }}>
+              <div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>NAME</div>
+                <input style={inputStyle} placeholder="Mrs. M. Divya" value={newFaculty.name} onChange={e => setNewFaculty({ ...newFaculty, name: e.target.value })} />
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>DESIGNATION</div>
+                <select style={inputStyle} value={newFaculty.designation} onChange={e => setNewFaculty({ ...newFaculty, designation: e.target.value })}>
+                  <option>Assistant Professor</option>
+                  <option>Associate Professor</option>
+                  <option>Professor</option>
+                  <option>HoD</option>
+                  <option>Dean</option>
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>DEPT</div>
+                <select style={inputStyle} value={newFaculty.department} onChange={e => setNewFaculty({ ...newFaculty, department: e.target.value })}>
+                  <option>AI&DS</option>
+                  <option>AI&ML</option>
+                  <option>ECE</option>
+                  <option>Chemistry</option>
+                  <option>Physics</option>
+                  <option>Maths</option>
+                  <option>CSE</option>
+                  <option>CCE</option>
+                </select>
+              </div>
+              <button style={{ ...btnStyle, height: 36 }} onClick={handleAddFaculty}>Add</button>
+            </div>
+          </div>
+
+          <div className="section-title">Faculty in Database ({dbFaculty.length})</div>
+          {dbFaculty.length === 0 ? (
+            <div className="info-card" style={{ textAlign: "center", color: "var(--text-muted)", padding: 30 }}>
+              No faculty in database yet. Add above or use Seed / Import tab.
+            </div>
+          ) : (
+            <div className="table-scroll">
+              <table className="timetable-grid">
+                <thead><tr><th>Name</th><th>Designation</th><th>Dept</th><th>Action</th></tr></thead>
+                <tbody>
+                  {dbFaculty.map(f => (
+                    <tr key={f.id}>
+                      <td style={{ fontWeight: 600 }}>{f.name}</td>
+                      <td style={{ fontSize: 12, color: "var(--text-secondary)" }}>{f.designation}</td>
+                      <td><span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, background: "rgba(6,214,160,0.12)", color: "#06d6a0" }}>{f.department}</span></td>
+                      <td><button style={deleteBtnStyle} onClick={() => handleDeleteFaculty(f.id, f.name)}>Delete</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === "classes" && (
+        <div>
+          <div className="info-card" style={{ marginBottom: 20 }}>
+            <div className="info-card-title">Add Class Section</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 80px 80px 1fr auto", gap: 10, alignItems: "end", marginTop: 10 }}>
+              <div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>NAME</div>
+                <input style={inputStyle} placeholder="II AI&DS-A" value={newClass.name} onChange={e => setNewClass({ ...newClass, name: e.target.value })} />
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>YEAR</div>
+                <select style={inputStyle} value={newClass.year} onChange={e => setNewClass({ ...newClass, year: parseInt(e.target.value) })}>
+                  <option value={2}>2</option><option value={3}>3</option><option value={4}>4</option>
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>SEC</div>
+                <input style={inputStyle} placeholder="A" value={newClass.section} onChange={e => setNewClass({ ...newClass, section: e.target.value })} />
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>SEM</div>
+                <select style={inputStyle} value={newClass.semester} onChange={e => setNewClass({ ...newClass, semester: parseInt(e.target.value) })}>
+                  <option value={4}>4</option><option value={6}>6</option><option value={8}>8</option>
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>INCHARGE</div>
+                <input style={inputStyle} placeholder="Mrs. M. Divya" value={newClass.class_incharge} onChange={e => setNewClass({ ...newClass, class_incharge: e.target.value })} />
+              </div>
+              <button style={{ ...btnStyle, height: 36 }} onClick={handleAddClass}>Add</button>
+            </div>
+          </div>
+
+          <div className="section-title">Classes in Database ({dbClasses.length})</div>
+          {dbClasses.length === 0 ? (
+            <div className="info-card" style={{ textAlign: "center", color: "var(--text-muted)", padding: 30 }}>
+              No classes in database yet. Add above or use Seed / Import tab.
+            </div>
+          ) : (
+            <div className="table-scroll">
+              <table className="timetable-grid">
+                <thead><tr><th>Name</th><th>Year</th><th>Sec</th><th>Sem</th><th>Incharge</th><th>Action</th></tr></thead>
+                <tbody>
+                  {dbClasses.map(c => (
+                    <tr key={c.id}>
+                      <td style={{ fontWeight: 600, color: "var(--accent-cyan)" }}>{c.name}</td>
+                      <td>{c.year}</td><td>{c.section}</td><td>{c.semester}</td>
+                      <td style={{ fontSize: 12 }}>{c.class_incharge}</td>
+                      <td><button style={deleteBtnStyle} onClick={() => handleDeleteClass(c.id, c.name)}>Delete</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === "seed" && (
+        <div>
+          <div className="info-card" style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 48, textAlign: "center", marginBottom: 12 }}>🌱</div>
+            <div className="info-card-title" style={{ textAlign: "center", fontSize: 14 }}>Seed Database from PDF Data</div>
+            <div style={{ color: "var(--text-secondary)", fontSize: 13, textAlign: "center", marginBottom: 20, maxWidth: 500, margin: "0 auto 20px" }}>
+              Push all pre-loaded timetable data (from the uploaded PDF) into your Supabase database. This includes {ROOMS.length} rooms, {Object.keys(COURSES).length} courses, {CLASSES.length} class sections, and all associated faculty.
+            </div>
+            <div style={{ textAlign: "center" }}>
+              <button
+                style={{ ...btnStyle, padding: "12px 32px", fontSize: 15, opacity: seeding ? 0.6 : 1 }}
+                onClick={seedDatabase}
+                disabled={seeding}
+              >
+                {seeding ? "Seeding..." : "Seed All Data to Supabase"}
+              </button>
+            </div>
+            {seedStatus && (
+              <div style={{
+                marginTop: 16, padding: "10px 14px", borderRadius: 8, fontSize: 13, textAlign: "center",
+                background: seedStatus.includes("Error") ? "rgba(239,68,68,0.12)" : seedStatus.includes("Done") ? "rgba(6,214,160,0.12)" : "rgba(59,130,246,0.12)",
+                color: seedStatus.includes("Error") ? "#f87171" : seedStatus.includes("Done") ? "#06d6a0" : "#60a5fa",
+                border: `1px solid ${seedStatus.includes("Error") ? "rgba(239,68,68,0.3)" : seedStatus.includes("Done") ? "rgba(6,214,160,0.3)" : "rgba(59,130,246,0.3)"}`,
+              }}>
+                {seedStatus}
+              </div>
+            )}
+          </div>
+
+          <div className="info-card">
+            <div className="info-card-title">What gets seeded</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 10 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--accent-cyan)", marginBottom: 4 }}>Rooms ({ROOMS.length})</div>
+                <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{ROOMS.join(", ")}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--accent-cyan)", marginBottom: 4 }}>Courses ({Object.keys(COURSES).length})</div>
+                <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{Object.values(COURSES).map(c => c.short).join(", ")}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--accent-cyan)", marginBottom: 4 }}>Classes ({CLASSES.length})</div>
+                <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{CLASSES.map(c => c.name).join(", ")}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--accent-cyan)", marginBottom: 4 }}>Faculty</div>
+                <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>All faculty from PDF timetable data</div>
+              </div>
             </div>
           </div>
         </div>
