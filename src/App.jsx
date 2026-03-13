@@ -1602,9 +1602,9 @@ function LoginScreen({ onLogin, onAuth }) {
             <div className="role-icon">🏫</div>
             <div><div className="role-name">Free Rooms</div><div className="role-desc">Check room availability</div></div>
           </div>
-          <div className="role-card" onClick={() => onLogin("admin")}>
-            <div className="role-icon">⚙️</div>
-            <div><div className="role-name">Admin</div><div className="role-desc">Manage timetables & rooms</div></div>
+          <div className="role-card" onClick={() => setAuthMode("login")} style={{ borderColor: "rgba(139,92,246,0.3)" }}>
+            <div className="role-icon">🔒</div>
+            <div><div className="role-name">Admin</div><div className="role-desc">Sign in required</div></div>
           </div>
         </div>
       </div>
@@ -1684,11 +1684,13 @@ export default function App() {
 
   if (!page) return <><style>{CSS}</style><LoginScreen onLogin={setPage} onAuth={handleAuth} /></>;
 
+  const isAdmin = user && profile?.role === "admin";
+
   const navItems = [
     { key: "student", icon: "🎓", label: "Student" },
     { key: "staff", icon: "👨‍🏫", label: "Staff" },
     { key: "free", icon: "🏫", label: "Free Rooms" },
-    { key: "admin", icon: "⚙️", label: "Admin" },
+    ...(isAdmin ? [{ key: "admin", icon: "⚙️", label: "Admin" }] : []),
   ];
 
   return (
@@ -1738,7 +1740,33 @@ export default function App() {
           {page === "student" && <StudentView />}
           {page === "staff" && <StaffView />}
           {page === "free" && <FreeRoomsView />}
-          {page === "admin" && <AdminView />}
+          {page === "admin" && isAdmin && <AdminView />}
+          {page === "admin" && !isAdmin && (
+            <div>
+              <div className="page-header">
+                <div className="page-title">Admin Access Required</div>
+                <div className="page-subtitle">You need to sign in with an admin account to access this page</div>
+              </div>
+              <div className="info-card" style={{ textAlign: "center", padding: 40 }}>
+                <div style={{ fontSize: 48, marginBottom: 16 }}>🔒</div>
+                <div style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 20 }}>
+                  {user ? "Your account doesn't have admin privileges." : "Please sign in with an admin account."}
+                </div>
+                {!user && (
+                  <button
+                    onClick={() => { setPage(null); }}
+                    style={{
+                      padding: "10px 24px", background: "var(--accent-cyan)", color: "#0a0e1a",
+                      border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700,
+                      cursor: "pointer", fontFamily: "'DM Sans', sans-serif"
+                    }}
+                  >
+                    Go to Sign In
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </main>
       </div>
     </>
