@@ -1410,10 +1410,21 @@ function LoginScreen({ onLogin, onAuth }) {
     e.preventDefault();
     setLoading(true);
     setError("");
-    const { data, error: err } = await supabase.auth.signInWithPassword({ email, password });
-    setLoading(false);
-    if (err) { setError(err.message); return; }
-    if (data?.user) onAuth(data.user);
+    try {
+      const { data, error: err } = await supabase.auth.signInWithPassword({ email, password });
+      if (err) { setError(err.message); setLoading(false); return; }
+      if (data?.session) {
+        // Profile fetch happens via onAuthStateChange in App
+        // Just need a small delay for the listener to fire
+        setTimeout(() => { onAuth(data.user); setLoading(false); }, 300);
+      } else {
+        setError("Sign in failed. Please try again.");
+        setLoading(false);
+      }
+    } catch (e) {
+      setError("Something went wrong. Please try again.");
+      setLoading(false);
+    }
   };
 
   const handleSignup = async (e) => {
@@ -1421,22 +1432,36 @@ function LoginScreen({ onLogin, onAuth }) {
     setLoading(true);
     setError("");
     setSuccess("");
-    const { data, error: err } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { full_name: fullName, role: selectedRole } }
-    });
-    setLoading(false);
-    if (err) { setError(err.message); return; }
-    if (data?.user) {
-      // Create profile
-      await supabase.from("profiles").upsert({
-        id: data.user.id,
-        role: selectedRole,
-        full_name: fullName,
+    try {
+      const { data, error: err } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: { full_name: fullName, role: selectedRole },
+          emailRedirectTo: window.location.origin,
+        }
       });
-      setSuccess("Account created! Check your email to confirm, or sign in now.");
-      setAuthMode("login");
+      if (err) { setError(err.message); setLoading(false); return; }
+      if (data?.user) {
+        // Create profile — admin role can only be set manually in Supabase
+        await supabase.from("profiles").upsert({
+          id: data.user.id,
+          role: selectedRole,
+          full_name: fullName,
+        });
+
+        // If session exists, user is auto-confirmed — log them in directly
+        if (data.session) {
+          onAuth(data.user);
+        } else {
+          setSuccess("Account created! Check your email to confirm, then sign in.");
+          setAuthMode("login");
+        }
+      }
+      setLoading(false);
+    } catch (e) {
+      setError("Something went wrong. Please try again.");
+      setLoading(false);
     }
   };
 
@@ -1502,11 +1527,10 @@ function LoginScreen({ onLogin, onAuth }) {
 
             {authMode === "signup" && (
               <div className="select-group">
-                <span className="select-label">Role</span>
+                <span className="select-label">I am a</span>
                 <select className="select-input" value={selectedRole} onChange={e => setSelectedRole(e.target.value)} style={{ width: "100%" }}>
                   <option value="student">Student</option>
-                  <option value="staff">Staff</option>
-                  <option value="admin">Admin</option>
+                  <option value="staff">Staff / Faculty</option>
                 </select>
               </div>
             )}
